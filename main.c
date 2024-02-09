@@ -1,15 +1,8 @@
 #include "glvk/glvk.h"
+#include "glvk_gh/glvk_gh.h"
 #include <stdio.h>
 
-#ifdef GLVK_WINDOWS
-#define GLFW_EXPOSE_NATIVE_WIN32
-#elif GLVK_LINUX
-#define GLFW_EXPOSE_NATIVE_X11
-#elif GLVK_MACOS
-#define GLFW_EXPOSE_NATIVE_COCOA
-#endif
 #include <GLFW/glfw3.h>
-#include <GLFW/glfw3native.h>
 
 void glvk_debug(const char* message, GLVKmessagetype type, GLVKmessageseverity severity) {
 	const char* const types[] = {
@@ -29,11 +22,11 @@ void glvk_debug(const char* message, GLVKmessagetype type, GLVKmessageseverity s
 	};
 
 	if (type < 0 || type > GLVK_TYPE_LAST) {
-		type = 3;
+		type = GLVK_TYPE_UNKNOWN;
 	}
 
-	if (severity < GLVK_SEVERITY_VERBOSE || type > GLVK_SEVERITY_LAST) {
-		severity = 3;
+	if (severity < GLVK_SEVERITY_VERBOSE || severity > GLVK_SEVERITY_LAST) {
+		severity = GLVK_SEVERITY_UNKNOWN;
 	}
 
 	printf("[%s] (%s) %s\n", types[type], severities[severity + 2], message);
@@ -55,10 +48,7 @@ int main(int argc, char** argv) {
 	glvkSetDebug(1);
 	glvkRegisterDebugFunc(glvk_debug);
 
-	GLVKwindow glvk_window = {
-		.hinstance = NULL,
-		.hwnd = glfwGetWin32Window(window),
-	};
+	GLVKwindow glvk_window = glvkGetGLFWWindowGH(window);
 
 	if (glvkInit(glvk_window) != 0) {
 		printf("Failed to initialize glvk\n");

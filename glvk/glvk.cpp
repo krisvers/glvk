@@ -11,7 +11,7 @@
 	#endif
 	
 	#if defined(TARGET_OS_MAC)
-		#define GLVK_MACOS 1
+		#define GLVK_APPLE 1
 	#endif
 	
 	#if defined(TARGET_OS_UNIX)
@@ -32,9 +32,9 @@
 #elif GLVK_LINUX
 #define VK_USE_PLATFORM_XLIB_KHR
 #define SURFACE_EXTENSION_NAME VK_KHR_XLIB_SURFACE_EXTENSION_NAME
-#elif GLVK_MACOS
+#elif GLVK_APPLE
 #define VK_USE_PLATFORM_MACOS_MVK
-#define SURFACE_EXTENSION_NAME VK_KHR_MACOS_MVK_SURFACE_EXTENSION_NAME
+#define SURFACE_EXTENSION_NAME "VK_MVK_macos_surface"
 #endif
 
 #include <vulkan/vulkan.h>
@@ -67,6 +67,7 @@ struct GLVKstate {
 
 	bool is_debug;
 	GLVKdebugfunc debugfunc;
+	GLVKwindow window;
 } static state;
 
 struct layer_t {
@@ -95,6 +96,7 @@ int glvkInit(GLVKwindow window) {
 		return 0;
 	}
 	state.inited = true;
+	state.window = window;
 
 	vkstate.info.app = {
 		.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -224,7 +226,7 @@ int glvkInit(GLVKwindow window) {
 		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create Vulkan surface");
 		return 1;
 	}
-	#elif GLVK_MACOS
+	#elif GLVK_APPLE
 	if (window.view == nullptr) {
 		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "View is null");
 		return 1;
