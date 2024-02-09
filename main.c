@@ -29,11 +29,11 @@ void glvk_debug(const char* message, GLVKmessagetype type, GLVKmessageseverity s
 	};
 
 	if (type < 0 || type > GLVK_TYPE_LAST) {
-		type = 3;
+		type = GLVK_TYPE_UNKNOWN;
 	}
 
 	if (severity < GLVK_SEVERITY_VERBOSE || type > GLVK_SEVERITY_LAST) {
-		severity = 3;
+		severity = GLVK_SEVERITY_UNKNOWN;
 	}
 
 	printf("[%s] (%s) %s\n", types[type], severities[severity + 2], message);
@@ -55,10 +55,22 @@ int main(int argc, char** argv) {
 	glvkSetDebug(1);
 	glvkRegisterDebugFunc(glvk_debug);
 
-	GLVKwindow glvk_window = {
+	GLVKwindow glvk_window;
+	#ifdef GLVK_WINDOWS
+	glvk_window = (GLVKwindow) {
 		.hinstance = NULL,
 		.hwnd = glfwGetWin32Window(window),
 	};
+	#elif GLVK_LINUX
+	glvk_window = (GLVKwindow){
+		.display = NULL,
+		.window = (unsigned long)glfwGetX11Window(window),
+	};
+	#elif GLVK_MACOS
+	glvk_window = (GLVKwindow){
+		.view = NULL,
+	};
+	#endif
 
 	if (glvkInit(glvk_window) != 0) {
 		printf("Failed to initialize glvk\n");
