@@ -2,6 +2,8 @@
 #include <vector>
 #include <format>
 #include <limits>
+#include <string>
+#include <sstream>
 
 #ifdef GLVK_APPLE
 	#include <TargetConditionals.h>
@@ -40,7 +42,7 @@
 #include <vulkan/vulkan.h>
 
 #define GLVKDEBUG(type, severity, message) if (state.is_debug && state.debugfunc) { state.debugfunc(message, type, severity); }
-#define GLVKDEBUGF(type, severity, fmt, ...) if (state.is_debug && state.debugfunc) { state.debugfunc(std::format(fmt, __VA_ARGS__).c_str(), type, severity); }
+#define GLVKDEBUGF(type, severity, fmt, ...) if (state.is_debug && state.debugfunc) { std::stringstream stream; stream << fmt << " "; debugStreamConcat(stream, __VA_ARGS__); state.debugfunc(stream.str().c_str(), type, severity); }
 
 struct GLVKvkinfo {
 	VkApplicationInfo app;
@@ -76,6 +78,17 @@ struct layer_t {
 };
 
 typedef layer_t extension_t;
+
+static void debugStreamConcat(std::stringstream& stream) {
+	return;
+}
+
+template<typename T, typename... Types>
+static void debugStreamConcat(std::stringstream& stream, T& arg, Types&... args) {
+	stream << arg << " ";
+
+	debugStreamConcat(stream, args...);
+}
 
 void glvkRegisterDebugFunc(GLVKdebugfunc func) {
 	if (func == nullptr) {
@@ -136,10 +149,10 @@ int glvkInit(GLVKwindow window) {
 		}
 
 		if (layer.required && !found) {
-			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan instance layer {}", layer.name);
+			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan instance layer", layer.name);
 			return 1;
 		} else if (!found) {
-			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_INFO, "Failed to find Vulkan instance layer {}", layer.name);
+			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_INFO, "Failed to find Vulkan instance layer", layer.name);
 		}
 	}
 
@@ -160,10 +173,10 @@ int glvkInit(GLVKwindow window) {
 		}
 
 		if (extension.required && !found) {
-			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan instance extension {}", extension.name);
+			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan instance extension", extension.name);
 			return 1;
 		} else if (!found) {
-			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_INFO, "Failed to find Vulkan instance extension {}", extension.name);
+			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_INFO, "Failed to find Vulkan instance extension", extension.name);
 		}
 	}
 
@@ -289,7 +302,7 @@ int glvkInit(GLVKwindow window) {
 		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find GPU");
 		return 1;
 	}
-	GLVKDEBUGF(GLVK_TYPE_VULKAN, GLVK_SEVERITY_VERBOSE, "Found GPU \"{}\"", physical_props.deviceName);
+	GLVKDEBUGF(GLVK_TYPE_VULKAN, GLVK_SEVERITY_VERBOSE, "Found GPU \"", physical_props.deviceName, "\"");
 
 	std::vector<layer_t> requested_device_layers;
 	std::vector<extension_t> requested_device_extensions = {
@@ -316,10 +329,10 @@ int glvkInit(GLVKwindow window) {
 
 		if (!found) {
 			if (layer.required) {
-				GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan device layer {}", layer.name);
+				GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan device layer", layer.name);
 				return 1;
 			} else {
-				GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_INFO, "Failed to find Vulkan device layer {}", layer.name);
+				GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_DEBUG, "Failed to find Vulkan device layer", layer.name);
 			}
 		}
 	}
@@ -343,10 +356,10 @@ int glvkInit(GLVKwindow window) {
 
 		if (!found) {
 			if (extension.required) {
-				GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan device extension {}", extension.name);
+				GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan device extension", extension.name);
 				return 1;
 			} else {
-				GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_INFO, "Failed to find Vulkan device extension {}", extension.name);
+				GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_INFO, "Failed to find Vulkan device extension", extension.name);
 			}
 		}
 	}
