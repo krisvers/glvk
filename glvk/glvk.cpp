@@ -3,24 +3,7 @@
 #include <format>
 #include <limits>
 
-#if defined(_WIN32) || defined(_WIN64) || defined(__WIN32__) || defined(_MSC_VER)
-	#define GLVK_WINDOWS 1
-#endif
-
-#if defined(__linux__)
-	#define GLVK_LINUX 1
-#endif
-
-#if defined(__unix__)
-	#define GLVK_UNIX 1
-#endif
-
-#if defined(__posix__)
-	#define GLVK_POSIX 1
-#endif
-
-#if defined(__APPLE__)
-	#define GLVK_APPLE 1
+#ifdef GLVK_APPLE
 	#include <TargetConditionals.h>
 	
 	#if defined(TARGET_OS_IPHONE)
