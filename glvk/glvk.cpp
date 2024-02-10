@@ -60,8 +60,14 @@ struct GLVKvkstate {
 	VkAllocationCallbacks* allocator;
 	VkInstance instance;
 	VkSurfaceKHR surface;
+	VkSurfaceCapabilitiesKHR surface_capabilities;
 	VkPhysicalDevice physical;
 	VkDevice device;
+
+	VkSurfaceFormatKHR surface_format;
+	VkPresentModeKHR surface_mode;
+	VkExtent2D extent;
+	VkSwapchainKHR swapchain;
 } static vkstate;
 
 struct GLVKstate {
@@ -483,6 +489,94 @@ int glvkInit(GLVKwindow window) {
 		return 1;
 	}
 
+	vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vkstate.physical, vkstate.surface, &vkstate.surface_capabilities);
+
+	uint32_t surface_format_count = 0;
+	vkGetPhysicalDeviceSurfaceFormatsKHR(vkstate.physical, vkstate.surface, &surface_format_count, nullptr);
+	if (surface_format_count == 0) {
+		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find surface formats");
+		return 1;
+	}
+
+	std::vector<VkSurfaceFormatKHR> surface_formats(surface_format_count);
+	vkGetPhysicalDeviceSurfaceFormatsKHR(vkstate.physical, vkstate.surface, &surface_format_count, surface_formats.data());
+
+	uint32_t surface_format_index = std::numeric_limits<uint32_t>::max();
+	for (size_t i = 0; i < surface_formats.size(); ++i) {
+		if (surface_formats[i].format == VK_FORMAT_B8G8R8A8_SRGB && surface_formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+			surface_format_index = i;
+			break;
+		}
+	}
+
+	if (surface_format_count == std::numeric_limits<uint32_t>::max()) {
+		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find surface format");
+		return 1;
+	}
+
+	uint32_t surface_modes_count = 0;
+	vkGetPhysicalDeviceSurfacePresentModesKHR(vkstate.physical, vkstate.surface, &surface_modes_count, nullptr);
+	if (surface_modes_count == 0) {
+		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find surface present modes");
+		return 1;
+	}
+
+	std::vector<VkPresentModeKHR> surface_modes(surface_modes_count);
+	vkGetPhysicalDeviceSurfacePresentModesKHR(vkstate.physical, vkstate.surface, &surface_modes_count, surface_modes.data());
+
+	uint32_t surface_mode_index = std::numeric_limits<uint32_t>::max();
+	for (size_t i = 0; i < surface_modes.size(); ++i) {
+		if (surface_modes[i] == VK_PRESENT_MODE_FIFO_KHR) {
+			surface_mode_index = i;
+		}
+		if (surface_modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
+			surface_mode_index = i;
+			break;
+		}
+	}
+
+	if (surface_mode_index == std::numeric_limits<uint32_t>::max()) {
+		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find surface present mode");
+		return 1;
+	}
+
+	vkstate.surface_format = surface_formats[surface_format_index];
+	vkstate.surface_mode = surface_modes[surface_mode_index];
+	vkstate.extent = vkstate.surface_capabilities.currentExtent;
+
+	VkSwapchainCreateInfoKHR swapchain_create_info = {
+		.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+		.pNext = nullptr,
+		.flags = 0,
+		.surface = vkstate.surface,
+		.minImageCount = vkstate.surface_capabilities.minImageCount,
+		.imageFormat = vkstate.surface_format.format,
+		.imageColorSpace = vkstate.surface_format.colorSpace,
+		.imageExtent = vkstate.extent,
+		.imageArrayLayers = 1,
+		.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+		.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+		.queueFamilyIndexCount = 0,
+		.pQueueFamilyIndices = nullptr,
+		.preTransform = vkstate.surface_capabilities.currentTransform,
+		.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+		.presentMode = vkstate.surface_mode,
+		.clipped = VK_TRUE,
+		.oldSwapchain = VK_NULL_HANDLE,
+	};
+
+	uint32_t indices[2] = { vkstate.queue_families.graphics, vkstate.queue_families.present };
+	if (vkstate.queue_families.graphics != vkstate.queue_families.present) {
+		swapchain_create_info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+		swapchain_create_info.queueFamilyIndexCount = 2;
+		swapchain_create_info.pQueueFamilyIndices = indices;
+	}
+
+	if (vkCreateSwapchainKHR(vkstate.device, &swapchain_create_info, vkstate.allocator, &vkstate.swapchain) != VK_SUCCESS) {
+		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create Vulkan swapchain");
+		return 1;
+	}
+
 	GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_VERBOSE, "Initialization success");
 	return 0;
 }
@@ -493,6 +587,7 @@ void glvkDeinit() {
 	}
 	state.inited = false;
 
+	vkDestroySwapchainKHR(vkstate.device, vkstate.swapchain, vkstate.allocator);
 	vkDestroyDevice(vkstate.device, vkstate.allocator);
 	vkDestroySurfaceKHR(vkstate.instance, vkstate.surface, vkstate.allocator);
 	vkDestroyInstance(vkstate.instance, nullptr);

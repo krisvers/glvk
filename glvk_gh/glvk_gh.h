@@ -10,7 +10,7 @@
 extern "C" {
 #endif
 
-/* returns a GLVKwindow with proper values for platform from a GLFWwindow */
+/* returns a GLVKwindow with proper members for the current platform from a GLFWwindow */
 GLVKwindow glvkGetGLFWWindowGH(GLFWwindow* window);
 
 #if defined(__cplusplus) || defined(__OBJC__)

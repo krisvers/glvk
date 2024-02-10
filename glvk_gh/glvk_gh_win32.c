@@ -6,7 +6,7 @@
 
 GLVKwindow glvkGetGLFWWindowGH(GLFWwindow* window) {
 	return (GLVKwindow) {
-		.hinstance = GetModuleHandle(nullptr),
+		.hinstance = GetModuleHandle(NULL),
 		.hwnd = glfwGetWin32Window(window),
 	};
 }
