@@ -4,6 +4,8 @@
 #include <string>
 #include <cstring>
 #include <sstream>
+#include <fstream>
+#include <stack>
 
 #ifdef GLVK_APPLE
 	#include <TargetConditionals.h>
@@ -66,9 +68,43 @@ struct GLVKvkstate {
 
 	VkSurfaceFormatKHR surface_format;
 	VkPresentModeKHR surface_mode;
+
 	VkExtent2D extent;
+	VkViewport viewport;
+	VkRect2D scissor;
+
+	uint32_t swapchain_image_count;
+	std::vector<VkImage> swapchain_images;
+	std::vector<VkImageView> swapchain_views;
 	VkSwapchainKHR swapchain;
+
+	std::vector<VkFramebuffer> framebuffers;
+
+	VkRenderPass render_pass;
+	VkShaderModule vshader;
+	VkShaderModule fshader;
+
+	VkDescriptorSetLayout desc_layout;
+	VkPipelineLayout pipeline_layout;
+	VkPipeline pipeline;
+
+	VkCommandBuffer command_buffer;
+	VkCommandPool command_pool;
+
+	VkQueue graphics_queue;
+	VkQueue present_queue;
+	VkSemaphore image_available;
+	VkSemaphore render_finished;
+	VkFence in_flight_fence;
+
+	VkDebugUtilsMessengerEXT debug_messenger;
 } static vkstate;
+
+struct GLVKglstate {
+	std::stack<GLenum> errors;
+	std::vector<GLuint> buffers;
+
+} static glstate;
 
 struct GLVKstate {
 	bool inited;
@@ -85,6 +121,10 @@ struct layer_t {
 
 typedef layer_t extension_t;
 
+struct vertex_t {
+	float pos[3];
+};
+
 static void debugFuncConcat(std::stringstream& stream, std::string& format) {
 	stream << format;
 }
@@ -99,7 +139,7 @@ static void debugFuncConcat(std::stringstream& stream, std::string& format, T& a
 
 	stream << std::string(format.begin(), format.begin() + index);
 	stream << arg;
-	if (index + 2 < format.length()) {
+	if (index + 2 < format.size()) {
 		format = std::string(format.begin() + index + 2, format.end());
 		debugFuncConcat(stream, format, args...);
 	}
@@ -127,13 +167,22 @@ void glvkSetDebug(int is_debug) {
 	state.is_debug = (is_debug != 0);
 }
 
+static void glPushError(GLenum error) {
+	if (glstate.errors.size() > 64) {
+		glstate.errors.empty();
+	}
+	glstate.errors.push(error);
+
+	const char* error_name = (error == GL_NO_ERROR) ? "GL_NO_ERROR" : (error == GL_INVALID_ENUM) ? "GL_INVALID_ENUM" : (error == GL_INVALID_VALUE) ? "GL_INVALID_VALUE" : (error == GL_INVALID_OPERATION) ? "GL_INVALID_OPERATION" : (error == GL_STACK_OVERFLOW) ? "GL_STACK_OVERFLOW" : (error == GL_STACK_UNDERFLOW) ? "GL_STACK_UNDERFLOW" : (error == GL_OUT_OF_MEMORY) ? "GL_OUT_OF_MEMORY" : "unknown";
+	GLVKDEBUGF(GLVK_TYPE_OPENGL, GLVK_SEVERITY_ERROR, "OpenGL error: {}", error_name);
+}
+
 int glvkInit(GLVKwindow window) {
 	GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_VERBOSE, "Initialization started");
 	if (state.inited) {
 		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_WARNING, "glvk already initialized");
 		return 0;
 	}
-	state.inited = true;
 	state.window = window;
 
 	vkstate.info.app = {
@@ -219,6 +268,43 @@ int glvkInit(GLVKwindow window) {
 	if (vkCreateInstance(&instance_create_info, vkstate.allocator, &vkstate.instance) != VK_SUCCESS) {
 		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create Vulkan instance");
 		return 1;
+	}
+
+	if (state.is_debug) {
+		for (const char*& name : instance_extensions) {
+			if (strcmp(name, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
+				PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(vkstate.instance, "vkCreateDebugUtilsMessengerEXT"));
+				if (vkCreateDebugUtilsMessengerEXT == nullptr) {
+					GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_WARNING, "Failed to find vkCreateDebugUtilsMessengerEXT");
+					break;
+				}
+
+				VkDebugUtilsMessengerCreateInfoEXT debug_create_info = {
+					.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+					.pNext = nullptr,
+					.flags = 0,
+					.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+					.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+					.pfnUserCallback = [](VkDebugUtilsMessageSeverityFlagBitsEXT message_severity, VkDebugUtilsMessageTypeFlagsEXT message_type, const VkDebugUtilsMessengerCallbackDataEXT* callback_data, void* user_data) -> VkBool32 {
+						const char* const severity = (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) ? "verbose" : (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) ? "info" : (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) ? "warning" : (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) ? "error" : "unknown";
+						const char* const type = (message_type & VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT) ? "general" : (message_type & VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT) ? "performance" : (message_type & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) ? "validation" : "unknown";
+						GLVKDEBUGF(GLVK_TYPE_VULKAN, GLVK_SEVERITY_DEBUG, "[{}] ({}) {}", severity, type, callback_data->pMessage);
+
+						if (message_severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+							return VK_TRUE;
+						}
+
+						return VK_FALSE;
+					},
+					.pUserData = nullptr,
+				};
+
+				if (vkCreateDebugUtilsMessengerEXT(vkstate.instance, &debug_create_info, vkstate.allocator, &vkstate.debug_messenger) != VK_SUCCESS) {
+					GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_WARNING, "Failed to create Vulkan debug messenger");
+				}
+				break;
+			}
+		}
 	}
 
 	#ifdef GLVK_WINDOWS
@@ -339,6 +425,7 @@ int glvkInit(GLVKwindow window) {
 		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find GPU");
 		return 1;
 	}
+
 	vkGetPhysicalDeviceProperties(vkstate.physical, &physical_props);
 	vkGetPhysicalDeviceFeatures(vkstate.physical, &physical_features);
 	vkGetPhysicalDeviceMemoryProperties(vkstate.physical, &physical_mem_props);
@@ -348,6 +435,10 @@ int glvkInit(GLVKwindow window) {
 	std::vector<extension_t> requested_device_extensions = {
 		{ VK_KHR_SWAPCHAIN_EXTENSION_NAME, true },
 	};
+
+	if (state.is_debug) {
+		requested_device_layers.push_back({ "VK_LAYER_KHRONOS_validation", false });
+	}
 
 	uint32_t device_layer_count = 0;
 	vkEnumerateDeviceLayerProperties(vkstate.physical, &device_layer_count, nullptr);
@@ -489,6 +580,8 @@ int glvkInit(GLVKwindow window) {
 		return 1;
 	}
 
+	vkGetDeviceQueue(vkstate.device, vkstate.queue_families.graphics, 0, &vkstate.graphics_queue);
+	vkGetDeviceQueue(vkstate.device, vkstate.queue_families.present, 0, &vkstate.present_queue);
 	vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vkstate.physical, vkstate.surface, &vkstate.surface_capabilities);
 
 	uint32_t surface_format_count = 0;
@@ -577,8 +670,490 @@ int glvkInit(GLVKwindow window) {
 		return 1;
 	}
 
+	vkGetSwapchainImagesKHR(vkstate.device, vkstate.swapchain, &vkstate.swapchain_image_count, nullptr);
+	vkstate.swapchain_images.resize(vkstate.swapchain_image_count);
+	vkGetSwapchainImagesKHR(vkstate.device, vkstate.swapchain, &vkstate.swapchain_image_count, vkstate.swapchain_images.data());
+
+	vkstate.swapchain_views.resize(vkstate.swapchain_image_count);
+	for (size_t i = 0; i < vkstate.swapchain_image_count; ++i) {
+		VkImageViewCreateInfo view_create_info = {
+			.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+			.pNext = nullptr,
+			.flags = 0,
+			.image = vkstate.swapchain_images[i],
+			.viewType = VK_IMAGE_VIEW_TYPE_2D,
+			.format = vkstate.surface_format.format,
+			.components = {
+				.r = VK_COMPONENT_SWIZZLE_IDENTITY,
+				.g = VK_COMPONENT_SWIZZLE_IDENTITY,
+				.b = VK_COMPONENT_SWIZZLE_IDENTITY,
+				.a = VK_COMPONENT_SWIZZLE_IDENTITY,
+			},
+			.subresourceRange = {
+				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+				.baseMipLevel = 0,
+				.levelCount = 1,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			},
+		};
+
+		vkCreateImageView(vkstate.device, &view_create_info, vkstate.allocator, &vkstate.swapchain_views[i]);
+	}
+
+	VkAttachmentDescription color_attachment = {
+		.flags = 0,
+		.format = vkstate.surface_format.format,
+		.samples = VK_SAMPLE_COUNT_1_BIT,
+		.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+		.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+		.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+		.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+		.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+	};
+
+	VkAttachmentReference color_reference = {
+		.attachment = 0,
+		.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+	};
+
+	VkSubpassDescription subpass = {
+		.flags = 0,
+		.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+		.inputAttachmentCount = 0,
+		.pInputAttachments = nullptr,
+		.colorAttachmentCount = 1,
+		.pColorAttachments = &color_reference,
+		.pResolveAttachments = nullptr,
+		.pDepthStencilAttachment = nullptr,
+		.preserveAttachmentCount = 0,
+		.pPreserveAttachments = nullptr,
+	};
+
+	VkSubpassDependency subpass_dependency = {
+		.srcSubpass = VK_SUBPASS_EXTERNAL,
+		.dstSubpass = 0,
+		.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		.srcAccessMask = 0,
+		.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+		.dependencyFlags = 0,
+	};
+
+	VkRenderPassCreateInfo render_pass_create_info = {
+		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.attachmentCount = 1,
+		.pAttachments = &color_attachment,
+		.subpassCount = 1,
+		.pSubpasses = &subpass,
+		.dependencyCount = 1,
+		.pDependencies = &subpass_dependency,
+	};
+
+	vkCreateRenderPass(vkstate.device, &render_pass_create_info, vkstate.allocator, &vkstate.render_pass);
+
+	vkstate.framebuffers.resize(vkstate.swapchain_image_count);
+	for (size_t i = 0; i < vkstate.swapchain_image_count; ++i) {
+		VkFramebufferCreateInfo framebuffer_create_info = {
+			.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+			.pNext = nullptr,
+			.flags = 0,
+			.renderPass = vkstate.render_pass,
+			.attachmentCount = 1,
+			.pAttachments = &vkstate.swapchain_views[i],
+			.width = vkstate.extent.width,
+			.height = vkstate.extent.height,
+			.layers = 1,
+		};
+
+		vkCreateFramebuffer(vkstate.device, &framebuffer_create_info, vkstate.allocator, &vkstate.framebuffers[i]);
+	}
+	
+	std::ifstream vshader_file("assets/shaders/vert.spv", std::ios::ate | std::ios::binary);
+	std::ifstream fshader_file("assets/shaders/frag.spv", std::ios::ate | std::ios::binary);
+	if (!vshader_file.is_open()) {
+		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to open assets/shaders/vert.spv");
+		return 1;
+	}
+	if (!fshader_file.is_open()) {
+		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to open assets/shaders/frag.spv");
+		return 1;
+	}
+
+	size_t size = vshader_file.tellg();
+	std::vector<uint8_t> v_spv(size);
+	vshader_file.seekg(0);
+	vshader_file.read(reinterpret_cast<char*>(v_spv.data()), size);
+	vshader_file.close();
+
+	size = fshader_file.tellg();
+	std::vector<uint8_t> f_spv(size);
+	fshader_file.seekg(0);
+	fshader_file.read(reinterpret_cast<char*>(f_spv.data()), size);
+	fshader_file.close();
+
+	VkShaderModuleCreateInfo vshader_create_info = {
+		.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.codeSize = v_spv.size(),
+		.pCode = reinterpret_cast<const uint32_t*>(v_spv.data()),
+	};
+
+	if (vkCreateShaderModule(vkstate.device, &vshader_create_info, vkstate.allocator, &vkstate.vshader) != VK_SUCCESS) {
+		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create vertex shader module");
+		return 1;
+	}
+
+	VkShaderModuleCreateInfo fshader_create_info = {
+		.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.codeSize = f_spv.size(),
+		.pCode = reinterpret_cast<const uint32_t*>(f_spv.data()),
+	};
+
+	if (vkCreateShaderModule(vkstate.device, &fshader_create_info, vkstate.allocator, &vkstate.fshader) != VK_SUCCESS) {
+		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create fragment shader module");
+		return 1;
+	}
+
+	VkPipelineShaderStageCreateInfo shader_stage_create_infos[2] = {
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+			.pNext = nullptr,
+			.flags = 0,
+			.stage = VK_SHADER_STAGE_VERTEX_BIT,
+			.module = vkstate.vshader,
+			.pName = "main",
+			.pSpecializationInfo = nullptr,
+		},
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+			.pNext = nullptr,
+			.flags = 0,
+			.stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+			.module = vkstate.fshader,
+			.pName = "main",
+			.pSpecializationInfo = nullptr,
+		},
+	};
+
+	VkDynamicState dynamic_states[2] = {
+		VK_DYNAMIC_STATE_VIEWPORT,
+		VK_DYNAMIC_STATE_SCISSOR,
+	};
+
+	VkPipelineDynamicStateCreateInfo pipeline_ds_create_info = {
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.dynamicStateCount = 2,
+		.pDynamicStates = dynamic_states,
+	};
+
+	/*
+	VkVertexInputBindingDescription vinput_binding_desc = {
+		.binding = 0,
+		.stride = sizeof(vertex_t),
+		.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE,
+	};
+
+	VkVertexInputAttributeDescription vinput_attr_desc[1] = {
+		{
+			.location = 0,
+			.binding = 0,
+			.format = VK_FORMAT_R32G32B32_SFLOAT,
+			.offset = offsetof(vertex_t, pos),
+		},
+	};
+	*/
+
+	VkPipelineVertexInputStateCreateInfo pipeline_vinput_state_create_info = {
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.vertexBindingDescriptionCount = 0,
+		.pVertexBindingDescriptions = nullptr,
+		.vertexAttributeDescriptionCount = 0,
+		.pVertexAttributeDescriptions = nullptr,
+	};
+
+	VkPipelineInputAssemblyStateCreateInfo pipeline_ia_state_create_info = {
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+		.primitiveRestartEnable = VK_FALSE,
+	};
+
+	vkstate.viewport = {
+		.x = 0,
+		.y = 0,
+		.width = static_cast<float>(vkstate.extent.width),
+		.height = static_cast<float>(vkstate.extent.height),
+		.minDepth = 0,
+		.maxDepth = 1,
+	};
+
+	vkstate.scissor = {
+		.offset = { 0, 0 },
+		.extent = vkstate.extent,
+	};
+
+	VkPipelineViewportStateCreateInfo pipeline_viewport_state_create_info = {
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.viewportCount = 1,
+		.pViewports = &vkstate.viewport,
+		.scissorCount = 1,
+		.pScissors = &vkstate.scissor,
+	};
+
+	VkPipelineRasterizationStateCreateInfo pipeline_rast_state_create_info = {
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.depthClampEnable = VK_FALSE,
+		.rasterizerDiscardEnable = VK_FALSE,
+		.polygonMode = VK_POLYGON_MODE_FILL,
+		.cullMode = VK_CULL_MODE_NONE,
+		.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+		.depthBiasEnable = VK_FALSE,
+		.depthBiasConstantFactor = 0,
+		.depthBiasClamp = 0,
+		.depthBiasSlopeFactor = 0,
+		.lineWidth = 1,
+	};
+
+	VkPipelineMultisampleStateCreateInfo pipeline_ms_state_create_info = {
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+		.sampleShadingEnable = VK_FALSE,
+		.minSampleShading = 1,
+		.pSampleMask = nullptr,
+		.alphaToCoverageEnable = VK_FALSE,
+		.alphaToOneEnable = VK_FALSE,
+	};
+
+	VkPipelineColorBlendAttachmentState pipeline_cba_state = {
+		.blendEnable = VK_FALSE,
+		.srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+		.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+		.colorBlendOp = VK_BLEND_OP_ADD,
+		.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+		.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+		.alphaBlendOp = VK_BLEND_OP_ADD,
+		.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+	};
+
+	VkPipelineColorBlendStateCreateInfo pipeline_cb_state_create_info = {
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.logicOpEnable = VK_FALSE,
+		.logicOp = VK_LOGIC_OP_COPY,
+		.attachmentCount = 1,
+		.pAttachments = &pipeline_cba_state,
+		.blendConstants = { 0, 0, 0, 0 },
+	};
+
+	VkDescriptorSetLayoutCreateInfo desc_set_layout_create_info = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.bindingCount = 0,
+		.pBindings = nullptr,
+	};
+
+	if (vkCreateDescriptorSetLayout(vkstate.device, &desc_set_layout_create_info, vkstate.allocator, &vkstate.desc_layout)) {
+		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create descriptor set layout");
+		return 1;
+	}
+
+	VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.setLayoutCount = 1,
+		.pSetLayouts = &vkstate.desc_layout,
+		.pushConstantRangeCount = 0,
+		.pPushConstantRanges = nullptr,
+	};
+
+	if (vkCreatePipelineLayout(vkstate.device, &pipeline_layout_create_info, vkstate.allocator, &vkstate.pipeline_layout) != VK_SUCCESS) {
+		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create pipeline layout");
+		return 1;
+	}
+
+	VkGraphicsPipelineCreateInfo pipeline_create_info = {
+		.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.stageCount = 2,
+		.pStages = shader_stage_create_infos,
+		.pVertexInputState = &pipeline_vinput_state_create_info,
+		.pInputAssemblyState = &pipeline_ia_state_create_info,
+		.pTessellationState = nullptr,
+		.pViewportState = &pipeline_viewport_state_create_info,
+		.pRasterizationState = &pipeline_rast_state_create_info,
+		.pMultisampleState = &pipeline_ms_state_create_info,
+		.pDepthStencilState = nullptr,
+		.pColorBlendState = &pipeline_cb_state_create_info,
+		.pDynamicState = &pipeline_ds_create_info,
+		.layout = vkstate.pipeline_layout,
+		.renderPass = vkstate.render_pass,
+		.subpass = 0,
+		.basePipelineHandle = VK_NULL_HANDLE,
+		.basePipelineIndex = -1,
+	};
+
+	if (vkCreateGraphicsPipelines(vkstate.device, VK_NULL_HANDLE, 1, &pipeline_create_info, vkstate.allocator, &vkstate.pipeline) != VK_SUCCESS) {
+		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create graphics pipeline");
+		return 1;
+	}
+
+	VkCommandPoolCreateInfo command_pool_create_info = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+		.queueFamilyIndex = vkstate.queue_families.graphics,
+	};
+
+	if (vkCreateCommandPool(vkstate.device, &command_pool_create_info, vkstate.allocator, &vkstate.command_pool) != VK_SUCCESS) {
+		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create command pool");
+		return 1;
+	}
+
+	VkCommandBufferAllocateInfo command_buffer_allocate_info = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+		.pNext = nullptr,
+		.commandPool = vkstate.command_pool,
+		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+		.commandBufferCount = 1,
+	};
+
+	if (vkAllocateCommandBuffers(vkstate.device, &command_buffer_allocate_info, &vkstate.command_buffer) != VK_SUCCESS) {
+		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to allocate command buffer");
+		return 1;
+	}
+
+	VkSemaphoreCreateInfo semaphore_create_info = {
+		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+	};
+
+	if (vkCreateSemaphore(vkstate.device, &semaphore_create_info, vkstate.allocator, &vkstate.render_finished) != VK_SUCCESS) {
+		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create semaphore");
+		return 1;
+	}
+
+	if (vkCreateSemaphore(vkstate.device, &semaphore_create_info, vkstate.allocator, &vkstate.image_available) != VK_SUCCESS) {
+		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create semaphore");
+		return 1;
+	}
+
+	VkFenceCreateInfo fence_create_info = {
+		.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = VK_FENCE_CREATE_SIGNALED_BIT,
+	};
+
+	if (vkCreateFence(vkstate.device, &fence_create_info, vkstate.allocator, &vkstate.in_flight_fence) != VK_SUCCESS) {
+		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create fence");
+		return 1;
+	}
+
+	state.inited = true;
 	GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_VERBOSE, "Initialization success");
 	return 0;
+}
+
+void glvkDraw() {
+	if (!state.inited) {
+		return;
+	}
+
+	vkWaitForFences(vkstate.device, 1, &vkstate.in_flight_fence, VK_TRUE, std::numeric_limits<uint64_t>::max());
+	vkResetFences(vkstate.device, 1, &vkstate.in_flight_fence);
+
+	uint32_t image_index = 0;
+	vkAcquireNextImageKHR(vkstate.device, vkstate.swapchain, std::numeric_limits<uint64_t>::max(), vkstate.image_available, VK_NULL_HANDLE, &image_index);
+
+	vkResetCommandBuffer(vkstate.command_buffer, 0);
+
+	VkCommandBufferBeginInfo command_buffer_begin_info = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+		.pNext = nullptr,
+		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+		.pInheritanceInfo = nullptr,
+	};
+
+	vkBeginCommandBuffer(vkstate.command_buffer, &command_buffer_begin_info);
+
+	VkClearValue clear_value = {
+		.color = { 0.0f, 0.0f, 0.0f, 1.0f },
+	};
+
+	VkRenderPassBeginInfo render_pass_begin_info = {
+		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+		.pNext = nullptr,
+		.renderPass = vkstate.render_pass,
+		.framebuffer = vkstate.framebuffers[image_index],
+		.renderArea = {
+			.offset = { 0, 0 },
+			.extent = vkstate.extent,
+		},
+		.clearValueCount = 1,
+		.pClearValues = &clear_value,
+	};
+
+	vkCmdBeginRenderPass(vkstate.command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+	vkCmdBindPipeline(vkstate.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkstate.pipeline);
+
+	vkCmdSetViewport(vkstate.command_buffer, 0, 1, &vkstate.viewport);
+	vkCmdSetScissor(vkstate.command_buffer, 0, 1, &vkstate.scissor);
+
+	vkCmdDraw(vkstate.command_buffer, 3, 1, 0, 0);
+	vkCmdEndRenderPass(vkstate.command_buffer);
+
+	vkEndCommandBuffer(vkstate.command_buffer);
+
+	VkPipelineStageFlags wait_stages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+	VkSubmitInfo submit_info = {
+		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+		.pNext = nullptr,
+		.waitSemaphoreCount = 1,
+		.pWaitSemaphores = &vkstate.image_available,
+		.pWaitDstStageMask = wait_stages,
+		.commandBufferCount = 1,
+		.pCommandBuffers = &vkstate.command_buffer,
+		.signalSemaphoreCount = 1,
+		.pSignalSemaphores = &vkstate.render_finished,
+	};
+
+	vkQueueSubmit(vkstate.graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
+
+	VkPresentInfoKHR present_info = {
+		.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+		.pNext = nullptr,
+		.waitSemaphoreCount = 1,
+		.pWaitSemaphores = &vkstate.render_finished,
+		.swapchainCount = 1,
+		.pSwapchains = &vkstate.swapchain,
+		.pImageIndices = &image_index,
+		.pResults = nullptr,
+	};
+
+	vkQueuePresentKHR(vkstate.present_queue, &present_info);
+	vkQueueWaitIdle(vkstate.present_queue);
 }
 
 void glvkDeinit() {
@@ -587,8 +1162,50 @@ void glvkDeinit() {
 	}
 	state.inited = false;
 
+	vkDeviceWaitIdle(vkstate.device);
+	vkDestroySemaphore(vkstate.device, vkstate.image_available, vkstate.allocator);
+	vkDestroySemaphore(vkstate.device, vkstate.render_finished, vkstate.allocator);
+	vkDestroyFence(vkstate.device, vkstate.in_flight_fence, vkstate.allocator);
+	vkFreeCommandBuffers(vkstate.device, vkstate.command_pool, 1, &vkstate.command_buffer);
+	vkDestroyCommandPool(vkstate.device, vkstate.command_pool, vkstate.allocator);
+	vkDestroyShaderModule(vkstate.device, vkstate.vshader, vkstate.allocator);
+	vkDestroyShaderModule(vkstate.device, vkstate.fshader, vkstate.allocator);
+	vkDestroyDescriptorSetLayout(vkstate.device, vkstate.desc_layout, vkstate.allocator);
+	vkDestroyPipelineLayout(vkstate.device, vkstate.pipeline_layout, vkstate.allocator);
+	vkDestroyPipeline(vkstate.device, vkstate.pipeline, vkstate.allocator);
+	for (size_t i = 0; i < vkstate.swapchain_image_count; ++i) {
+		vkDestroyFramebuffer(vkstate.device, vkstate.framebuffers[i], vkstate.allocator);
+	}
+	vkDestroyRenderPass(vkstate.device, vkstate.render_pass, vkstate.allocator);
+	for (size_t i = 0; i < vkstate.swapchain_image_count; ++i) {
+		vkDestroyImageView(vkstate.device, vkstate.swapchain_views[i], vkstate.allocator);
+	}
 	vkDestroySwapchainKHR(vkstate.device, vkstate.swapchain, vkstate.allocator);
 	vkDestroyDevice(vkstate.device, vkstate.allocator);
 	vkDestroySurfaceKHR(vkstate.instance, vkstate.surface, vkstate.allocator);
+	if (vkstate.debug_messenger != VK_NULL_HANDLE) {
+		PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(vkstate.instance, "vkDestroyDebugUtilsMessengerEXT"));
+		if (vkDestroyDebugUtilsMessengerEXT != nullptr) {
+			vkDestroyDebugUtilsMessengerEXT(vkstate.instance, vkstate.debug_messenger, vkstate.allocator);
+		}
+	}
 	vkDestroyInstance(vkstate.instance, nullptr);
+}
+
+GLenum glGetError() {
+	if (glstate.errors.empty()) {
+		return GL_NO_ERROR;
+	}
+
+	GLenum error = glstate.errors.top();
+	glstate.errors.pop();
+
+	return error;
+}
+
+void glGenBuffers(GLsizei n, GLuint* buffers) {
+	for (GLsizei i = 0; i < n; ++i) {
+		glstate.buffers.push_back(glstate.next_buffer);
+		buffers[i] = glstate.next_buffer++;
+	}
 }

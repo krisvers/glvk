@@ -56,8 +56,9 @@ int main(int argc, char** argv) {
 	}
 
 	while (!glfwWindowShouldClose(window)) {
-		glfwPollEvents();
+		glvkDraw();
 		glfwSwapBuffers(window);
+		glfwPollEvents();
 	}
 
 	glvkDeinit();
