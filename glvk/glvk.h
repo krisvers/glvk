@@ -67,9 +67,9 @@ void glvkRegisterDebugFunc(GLVKdebugfunc func);
 void glvkSetDebug(int enabled);
 
 /* cleans up all necessary vulkan utilities*/
-void glvkDeinit();
+void glvkDeinit(void);
 
-void glvkDraw();
+void glvkDraw(void);
 
 typedef unsigned int GLenum;
 typedef unsigned char GLboolean;
@@ -87,12 +87,12 @@ typedef double GLdouble;
 typedef double GLclampd;
 typedef void GLvoid;
 
-GLenum glGetError();
+GLenum glGetError(void);
 
-void glGenBuffers(int n, unsigned int* buffers);
-void glBindBuffer(unsigned int target, unsigned int buffer);
-void glBufferData(unsigned int target, int size, const void* data, unsigned int usage);
-void glDeleteBuffers(int n, const unsigned int* buffers);
+void glGenBuffers(GLsizei n, GLuint* buffers);
+void glBindBuffer(GLenum target, GLuint buffer);
+void glBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage);
+void glDeleteBuffers(GLsizei n, const GLuint* buffers);
 
 #define GL_DEPTH_BUFFER_BIT 0x00000100
 #define GL_STENCIL_BUFFER_BIT 0x00000400

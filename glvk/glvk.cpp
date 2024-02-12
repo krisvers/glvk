@@ -6,6 +6,7 @@
 #include <sstream>
 #include <fstream>
 #include <stack>
+#include <vulkan/vulkan_core.h>
 
 #ifdef GLVK_APPLE
 	#include <TargetConditionals.h>
@@ -100,10 +101,33 @@ struct GLVKvkstate {
 	VkDebugUtilsMessengerEXT debug_messenger;
 } static vkstate;
 
+struct glbuffer_t {
+	GLuint id;
+	VkBuffer buffer;
+	VkDeviceMemory memory;
+	VkDeviceSize size;
+	GLenum usage;
+};
+
+struct GLVKglboundbuffers {
+	GLuint array;
+	GLuint element_array;
+	GLuint copy_read;
+	GLuint copy_write;
+	GLuint pixel_pack;
+	GLuint pixel_unpack;
+	GLuint transform_feedback;
+	GLuint uniform;
+	GLuint shader_storage;
+	GLuint texture;
+};
+
 struct GLVKglstate {
 	std::stack<GLenum> errors;
-	std::vector<GLuint> buffers;
+	std::vector<glbuffer_t> buffers;
 
+	GLVKglboundbuffers bound_buffers;
+	GLuint bound_vao;
 } static glstate;
 
 struct GLVKstate {
@@ -169,7 +193,7 @@ void glvkSetDebug(int is_debug) {
 
 static void glPushError(GLenum error) {
 	if (glstate.errors.size() > 64) {
-		glstate.errors.empty();
+		glstate.errors.pop();
 	}
 	glstate.errors.push(error);
 
@@ -1192,7 +1216,7 @@ void glvkDeinit() {
 	vkDestroyInstance(vkstate.instance, nullptr);
 }
 
-GLenum glGetError() {
+GLenum glGetError(void) {
 	if (glstate.errors.empty()) {
 		return GL_NO_ERROR;
 	}
@@ -1204,8 +1228,150 @@ GLenum glGetError() {
 }
 
 void glGenBuffers(GLsizei n, GLuint* buffers) {
+	if (n < 1) {
+		glPushError(GL_INVALID_VALUE);
+		return;
+	}
+
 	for (GLsizei i = 0; i < n; ++i) {
-		glstate.buffers.push_back(glstate.next_buffer);
-		buffers[i] = glstate.next_buffer++;
+		glbuffer_t buffer = {
+			.id = static_cast<GLuint>(glstate.buffers.size()) + 1,
+			.buffer = VK_NULL_HANDLE,
+			.memory = VK_NULL_HANDLE,
+			.size = 0,
+		};
+
+		glstate.buffers.push_back(buffer);
+		buffers[i] = buffer.id;
+	}
+}
+
+void glBindBuffer(GLenum target, GLuint buffer) {
+	if (
+		target != GL_ARRAY_BUFFER ||
+		target != GL_ELEMENT_ARRAY_BUFFER ||
+		target != GL_COPY_READ_BUFFER ||
+		target != GL_COPY_WRITE_BUFFER ||
+		target != GL_PIXEL_PACK_BUFFER ||
+		target != GL_PIXEL_UNPACK_BUFFER ||
+		target != GL_TRANSFORM_FEEDBACK_BUFFER ||
+		target != GL_UNIFORM_BUFFER ||
+		target != GL_SHADER_STORAGE_BUFFER ||
+		target != GL_TEXTURE_BUFFER
+	) {
+		glPushError(GL_INVALID_ENUM);
+		return;
+	}
+
+	if (buffer == 0 || buffer > glstate.buffers.size()) {
+		glPushError(GL_INVALID_VALUE);
+		return;
+	}
+
+	if (target == GL_ARRAY_BUFFER) {
+		glstate.bound_buffers.array = buffer;
+	} else if (target == GL_ELEMENT_ARRAY_BUFFER) {
+		glstate.bound_buffers.element_array = buffer;
+	} else if (target == GL_COPY_READ_BUFFER) {
+		glstate.bound_buffers.copy_read = buffer;
+	} else if (target == GL_COPY_WRITE_BUFFER) {
+		glstate.bound_buffers.copy_write = buffer;
+	} else if (target == GL_PIXEL_PACK_BUFFER) {
+		glstate.bound_buffers.pixel_pack = buffer;
+	} else if (target == GL_PIXEL_UNPACK_BUFFER) {
+		glstate.bound_buffers.pixel_unpack = buffer;
+	} else if (target == GL_TRANSFORM_FEEDBACK_BUFFER) {
+		glstate.bound_buffers.transform_feedback = buffer;
+	} else if (target == GL_UNIFORM_BUFFER) {
+		glstate.bound_buffers.uniform = buffer;
+	} else if (target == GL_SHADER_STORAGE_BUFFER) {
+		glstate.bound_buffers.shader_storage = buffer;
+	} else if (target == GL_TEXTURE_BUFFER) {
+		glstate.bound_buffers.texture = buffer;
+	} else {
+		glPushError(GL_INVALID_ENUM);
+		return;
+	}
+}
+
+void glBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage) {
+	GLuint buffer = 0;
+	if (target == GL_ARRAY_BUFFER) {
+		buffer = glstate.bound_buffers.array;
+	} else if (target == GL_ELEMENT_ARRAY_BUFFER) {
+		buffer = glstate.bound_buffers.element_array;
+	} else if (target == GL_COPY_READ_BUFFER) {
+		buffer = glstate.bound_buffers.copy_read;
+	} else if (target == GL_COPY_WRITE_BUFFER) {
+		buffer = glstate.bound_buffers.copy_write;
+	} else if (target == GL_PIXEL_PACK_BUFFER) {
+		buffer = glstate.bound_buffers.pixel_pack;
+	} else if (target == GL_PIXEL_UNPACK_BUFFER) {
+		buffer = glstate.bound_buffers.pixel_unpack;
+	} else if (target == GL_TRANSFORM_FEEDBACK_BUFFER) {
+		buffer = glstate.bound_buffers.transform_feedback;
+	} else if (target == GL_UNIFORM_BUFFER) {
+		buffer = glstate.bound_buffers.uniform;
+	} else if (target == GL_SHADER_STORAGE_BUFFER) {
+		buffer = glstate.bound_buffers.shader_storage;
+	} else if (target == GL_TEXTURE_BUFFER) {
+		buffer = glstate.bound_buffers.texture;
+	} else {
+		glPushError(GL_INVALID_ENUM);
+		return;
+	}
+
+	if (buffer == 0 || buffer > glstate.buffers.size()) {
+		glPushError(GL_INVALID_OPERATION);
+		return;
+	}
+
+	if (size < 0) {
+		glPushError(GL_INVALID_VALUE);
+		return;
+	}
+
+	if (usage != GL_STREAM_DRAW || usage != GL_STREAM_READ || usage != GL_STREAM_COPY || usage != GL_STATIC_DRAW || usage != GL_STATIC_READ || usage != GL_STATIC_COPY || usage != GL_DYNAMIC_DRAW || usage != GL_DYNAMIC_READ || usage != GL_DYNAMIC_COPY) {
+		glPushError(GL_INVALID_ENUM);
+		return;
+	}
+
+	glbuffer_t& glbuffer = glstate.buffers[buffer - 1];
+	if (glbuffer.buffer != VK_NULL_HANDLE) {
+		vkDestroyBuffer(vkstate.device, glbuffer.buffer, vkstate.allocator);
+		vkFreeMemory(vkstate.device, glbuffer.memory, vkstate.allocator);
+	}
+
+	VkBufferCreateInfo buffer_create_info = {
+		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.size = static_cast<VkDeviceSize>(size),
+		.usage = 0,
+		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+		.queueFamilyIndexCount = 0,
+		.pQueueFamilyIndices = nullptr,
+	};
+
+
+}
+
+void glDeleteBuffers(GLsizei n, const GLuint *buffers) {
+	if (n < 1 || buffers == nullptr) {
+		glPushError(GL_INVALID_VALUE);
+		return;
+	}
+
+	for (GLsizei i = 0; i < n; ++i) {
+		if (buffers[i] == 0 || buffers[i] > glstate.buffers.size()) {
+			glPushError(GL_INVALID_VALUE);
+			return;
+		}
+
+		glbuffer_t& glbuffer = glstate.buffers[buffers[i] - 1];
+		if (glbuffer.buffer != VK_NULL_HANDLE) {
+			vkDestroyBuffer(vkstate.device, glbuffer.buffer, vkstate.allocator);
+			vkFreeMemory(vkstate.device, glbuffer.memory, vkstate.allocator);
+		}
 	}
 }

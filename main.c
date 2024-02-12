@@ -55,6 +55,12 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
+	GLuint vbo;
+	glGenBuffers(1, &vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	glBufferData(GL_ARRAY_BUFFER, 6 * sizeof(float), (float[]){-0.5f, -0.5f, 0.0f, 0.5f, -0.5f, 0.0f}, GL_STATIC_DRAW);
+	glDeleteBuffers(1, &vbo);
+
 	while (!glfwWindowShouldClose(window)) {
 		glvkDraw();
 		glfwSwapBuffers(window);
