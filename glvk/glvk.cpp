@@ -16,7 +16,7 @@
 	#endif
 	
 	#if defined(TARGET_OS_MAC)
-		#define GLVK_APPLE 1
+		#define GLVK_MAC 1
 	#endif
 	
 	#if defined(TARGET_OS_UNIX)
@@ -39,13 +39,15 @@
 #define SURFACE_EXTENSION_NAME VK_KHR_XLIB_SURFACE_EXTENSION_NAME
 #elif GLVK_APPLE
 #define VK_USE_PLATFORM_MACOS_MVK
-#define SURFACE_EXTENSION_NAME "VK_MVK_macos_surface"
+#define SURFACE_EXTENSION_NAME "VK_EXT_metal_surface"
+#define VK_USE_PLATFORM_METAL_EXT
 #endif
 
 #include <vulkan/vulkan.h>
 
 #define GLVKDEBUG(type, severity, message) if (state.is_debug && state.debugfunc) { state.debugfunc(message, type, severity); }
 #define GLVKDEBUGF(type, severity, fmt, ...) if (state.is_debug && state.debugfunc) { debugFunc(type, severity, fmt, __VA_ARGS__); }
+#define GLPUSHERROR(error) { GLVKDEBUGF(GLVK_TYPE_OPENGL, GLVK_SEVERITY_ERROR, "OpenGL error: {} at {}:{}", (error == GL_NO_ERROR) ? "GL_NO_ERROR" : (error == GL_INVALID_ENUM) ? "GL_INVALID_ENUM" : (error == GL_INVALID_VALUE) ? "GL_INVALID_VALUE" : (error == GL_INVALID_OPERATION) ? "GL_INVALID_OPERATION" : (error == GL_STACK_OVERFLOW) ? "GL_STACK_OVERFLOW" : (error == GL_STACK_UNDERFLOW) ? "GL_STACK_UNDERFLOW" : (error == GL_OUT_OF_MEMORY) ? "GL_OUT_OF_MEMORY" : "unknown", __FILE__, __LINE__); glPushError(error); }
 
 struct GLVKvkinfo {
 	VkApplicationInfo app;
@@ -196,9 +198,6 @@ static void glPushError(GLenum error) {
 		glstate.errors.pop();
 	}
 	glstate.errors.push(error);
-
-	const char* error_name = (error == GL_NO_ERROR) ? "GL_NO_ERROR" : (error == GL_INVALID_ENUM) ? "GL_INVALID_ENUM" : (error == GL_INVALID_VALUE) ? "GL_INVALID_VALUE" : (error == GL_INVALID_OPERATION) ? "GL_INVALID_OPERATION" : (error == GL_STACK_OVERFLOW) ? "GL_STACK_OVERFLOW" : (error == GL_STACK_UNDERFLOW) ? "GL_STACK_UNDERFLOW" : (error == GL_OUT_OF_MEMORY) ? "GL_OUT_OF_MEMORY" : "unknown";
-	GLVKDEBUGF(GLVK_TYPE_OPENGL, GLVK_SEVERITY_ERROR, "OpenGL error: {}", error_name);
 }
 
 int glvkInit(GLVKwindow window) {
@@ -230,6 +229,10 @@ int glvkInit(GLVKwindow window) {
 		requested_instance_extensions.push_back({ VK_EXT_DEBUG_UTILS_EXTENSION_NAME, false });
 	}
 
+	#ifdef GLVK_MAC
+
+	#endif
+
 	uint32_t instance_layer_count = 0;
 	vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr);
 
@@ -247,10 +250,10 @@ int glvkInit(GLVKwindow window) {
 		}
 
 		if (layer.required && !found) {
-			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan instance layer ", layer.name);
+			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan instance layer {}", layer.name);
 			return 1;
 		} else if (!found) {
-			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_INFO, "Failed to find Vulkan instance layer ", layer.name);
+			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_INFO, "Failed to find Vulkan instance layer {}", layer.name);
 		}
 	}
 
@@ -271,10 +274,10 @@ int glvkInit(GLVKwindow window) {
 		}
 
 		if (extension.required && !found) {
-			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan instance extension ", extension.name);
+			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "Failed to find required Vulkan instance extension {}", extension.name);
 			return 1;
 		} else if (!found) {
-			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_INFO, "Failed to find Vulkan instance extension ", extension.name);
+			GLVKDEBUGF(GLVK_TYPE_GLVK, GLVK_SEVERITY_INFO, "Failed to find Vulkan instance extension {}", extension.name);
 		}
 	}
 
@@ -374,20 +377,20 @@ int glvkInit(GLVKwindow window) {
 		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create Vulkan surface");
 		return 1;
 	}
-	#elif GLVK_APPLE
-	if (window.view == nullptr) {
-		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "View is null");
+	#elif GLVK_MAC
+	if (window.layer == nullptr) {
+		GLVKDEBUG(GLVK_TYPE_GLVK, GLVK_SEVERITY_ERROR, "layer is null");
 		return 1;
 	}
 
-	VkMacOSSurfaceCreateInfoMVK surface_create_info = {
-		.sType = VK_STRUCTURE_TYPE_MACOS_SURFACE_CREATE_INFO_MVK,
+	VkMetalSurfaceCreateInfoEXT surface_create_info = {
+		.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT,
 		.pNext = nullptr,
 		.flags = 0,
-		.pView = window.view,
+		.pLayer = window.layer,
 	};
 
-	if (vkCreateMacOSSurfaceMVK(vkstate.instance, &surface_create_info, vkstate.allocator, &vkstate.surface) != VK_SUCCESS) {
+	if (vkCreateMetalSurfaceEXT(vkstate.instance, &surface_create_info, vkstate.allocator, &vkstate.surface) != VK_SUCCESS) {
 		GLVKDEBUG(GLVK_TYPE_VULKAN, GLVK_SEVERITY_ERROR, "Failed to create Vulkan surface");
 		return 1;
 	}
@@ -1229,7 +1232,7 @@ GLenum glGetError(void) {
 
 void glGenBuffers(GLsizei n, GLuint* buffers) {
 	if (n < 1) {
-		glPushError(GL_INVALID_VALUE);
+		GLPUSHERROR(GL_INVALID_VALUE);
 		return;
 	}
 
@@ -1248,15 +1251,15 @@ void glGenBuffers(GLsizei n, GLuint* buffers) {
 
 void glBindBuffer(GLenum target, GLuint buffer) {
 	if (
-		target != GL_ARRAY_BUFFER ||
-		target != GL_ELEMENT_ARRAY_BUFFER ||
-		target != GL_COPY_READ_BUFFER ||
-		target != GL_COPY_WRITE_BUFFER ||
-		target != GL_PIXEL_PACK_BUFFER ||
-		target != GL_PIXEL_UNPACK_BUFFER ||
-		target != GL_TRANSFORM_FEEDBACK_BUFFER ||
-		target != GL_UNIFORM_BUFFER ||
-		target != GL_SHADER_STORAGE_BUFFER ||
+		target != GL_ARRAY_BUFFER &&
+		target != GL_ELEMENT_ARRAY_BUFFER &&
+		target != GL_COPY_READ_BUFFER &&
+		target != GL_COPY_WRITE_BUFFER &&
+		target != GL_PIXEL_PACK_BUFFER &&
+		target != GL_PIXEL_UNPACK_BUFFER &&
+		target != GL_TRANSFORM_FEEDBACK_BUFFER &&
+		target != GL_UNIFORM_BUFFER &&
+		target != GL_SHADER_STORAGE_BUFFER &&
 		target != GL_TEXTURE_BUFFER
 	) {
 		glPushError(GL_INVALID_ENUM);

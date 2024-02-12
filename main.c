@@ -1,6 +1,7 @@
 #include "glvk/glvk.h"
 #include "glvk_gh/glvk_gh.h"
 #include <stdio.h>
+#include <unistd.h>
 
 #include <GLFW/glfw3.h>
 
@@ -36,6 +37,11 @@ int main(int argc, char** argv) {
 	if (!glfwInit()) {
 		printf("Failed to initialize GLFW\n");
 		return 1;
+	}
+
+	/* pylauncher work-around */
+	if (argc >= 2) {
+		chdir(argv[1]);
 	}
 
 	GLFWwindow* window = glfwCreateWindow(800, 600, "test", NULL, NULL);

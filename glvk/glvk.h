@@ -51,7 +51,7 @@ typedef struct {
 	void* display;
 	unsigned long window;
 #elif GLVK_APPLE
-	void* view;
+	void* layer;
 #endif
 } GLVKwindow;
 
